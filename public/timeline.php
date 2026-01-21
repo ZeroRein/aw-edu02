@@ -8,26 +8,68 @@ if (empty($_SESSION['login_user_id'])) {
   return;
 }
 
+// ログインユーザー情報取得
 $user_select_sth = $dbh->prepare("SELECT * from users WHERE id = :id");
 $user_select_sth->execute([':id' => $_SESSION['login_user_id']]);
 $user = $user_select_sth->fetch();
 
+// --- 投稿処理 (POST) ---
 if (isset($_POST['body']) && !empty($_SESSION['login_user_id'])) {
-  $image_filename = null;
-  if (!empty($_POST['image_base64'])) {
-    $base64 = preg_replace('/^data:.+base64,/', '', $_POST['image_base64']);
-    $image_binary = base64_decode($base64);
-    $image_filename = strval(time()) . bin2hex(random_bytes(25)) . '.png';
-    $filepath =  '/var/www/upload/image/' . $image_filename;
-    file_put_contents($filepath, $image_binary);
+
+  // 1. 画像ファイルをサーバーに保存し、ファイル名のリストを作る
+  $uploaded_filenames = [];
+
+  if (isset($_POST['image_base64']) && is_array($_POST['image_base64'])) {
+      foreach ($_POST['image_base64'] as $base64) {
+          if (empty($base64)) continue;
+
+          // Base64デコード
+          $base64 = preg_replace('/^data:.+base64,/', '', $base64);
+          $image_binary = base64_decode($base64);
+
+          // ファイル名生成 (一意にする)
+          $image_filename = strval(time()) . bin2hex(random_bytes(25)) . '.png';
+          $filepath =  '/var/www/upload/image/' . $image_filename;
+
+          // 保存
+          file_put_contents($filepath, $image_binary);
+          $uploaded_filenames[] = $image_filename;
+      }
   }
 
-  $insert_sth = $dbh->prepare("INSERT INTO bbs_entries (user_id, body, image_filename) VALUES (:user_id, :body, :image_filename)");
-  $insert_sth->execute([
-    ':user_id' => $_SESSION['login_user_id'],
-    ':body' => $_POST['body'],
-    ':image_filename' => $image_filename,
-  ]);
+  // 2. データベースへの保存 (トランザクション)
+  try {
+      $dbh->beginTransaction();
+
+      // (A) bbs_entries に本文を保存
+      // ※ image_filename カラムはもう使わないのでINSERT対象から外す
+      $insert_sth = $dbh->prepare("INSERT INTO bbs_entries (user_id, body) VALUES (:user_id, :body)");
+      $insert_sth->execute([
+          ':user_id' => $_SESSION['login_user_id'],
+          ':body' => $_POST['body'],
+      ]);
+
+      // (B) 直前のINSERTで発行されたIDを取得
+      $entryId = $dbh->lastInsertId();
+
+      // (C) entry_images に画像を保存
+      if (!empty($uploaded_filenames)) {
+          $image_sth = $dbh->prepare("INSERT INTO entry_images (entry_id, image_filename) VALUES (:entry_id, :filename)");
+          
+          foreach ($uploaded_filenames as $filename) {
+              $image_sth->execute([
+                  ':entry_id' => $entryId,  // 親のID
+                  ':filename' => $filename,
+              ]);
+          }
+      }
+
+      $dbh->commit();
+
+  } catch (Exception $e) {
+      $dbh->rollBack();
+      // 本来はここでエラーログなどを出す
+  }
 
   header("HTTP/1.1 303 See Other");
   header("Location: ./timeline.php");
@@ -43,12 +85,16 @@ if (isset($_POST['body']) && !empty($_SESSION['login_user_id'])) {
 </div>
 
 <form method="POST" action="./timeline.php">
-  <textarea name="body" required></textarea>
+  <textarea name="body" required placeholder="今なにしてる？"></textarea>
   <div style="margin: 1em 0;">
-    <input type="file" accept="image/*" name="image" id="imageInput">
+    <input type="file" accept="image/*" name="image[]" id="imageInput" multiple>
+    <button type="button" id="removeImageButton" style="display: none; margin-left: 10px;">画像を削除</button>
   </div>
-  <input id="imageBase64Input" type="hidden" name="image_base64">
-  <canvas id="imageCanvas" style="display: none;"></canvas>
+  
+  <div id="hiddenInputsContainer"></div>
+
+  <div id="imagePreviewContainer" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px;"></div>
+  
   <button type="submit">送信</button>
 </form>
 <hr>
@@ -66,12 +112,10 @@ if (isset($_POST['body']) && !empty($_SESSION['login_user_id'])) {
   <dt>内容</dt>
   <dd data-role="entryBodyArea"></dd>
   <dt>画像</dt>
-  <dd>
-    <img src="" style="display: none; max-width: 200px;" data-role="entryImageArea">
-  </dd>
+  <dd data-role="entryImageArea"></dd>
 </dl>
-<div id="entriesRenderArea"></div>
 
+<div id="entriesRenderArea"></div>
 <div id="loadingIndicator" style="display: none;">読み込み中...</div>
 
 <script>
@@ -80,20 +124,19 @@ document.addEventListener("DOMContentLoaded", () => {
   const entriesRenderArea = document.getElementById('entriesRenderArea');
   const loadingIndicator = document.getElementById('loadingIndicator');
 
-  let lastId = null; // 最後に読み込んだ投稿のIDを記録
-  let isLoading = false; // 重複読み込み防止用フラグ
-  let isFinished = false; // 全件読み終わったかどうかのフラグ
+  let lastId = null;
+  let isLoading = false;
+  let isFinished = false;
 
-  // 投稿を取得して描画する関数
+  // --- 投稿取得・表示ロジック ---
   const fetchEntries = () => {
-    if (isLoading || isFinished) return; // 読み込み中または終了なら何もしない
+    if (isLoading || isFinished) return;
 
     isLoading = true;
     loadingIndicator.style.display = 'block';
 
     const request = new XMLHttpRequest();
-    // lastIdがあればURLパラメータとして付与する
-    let url = '/timeline_json.php';
+    let url = '/timeline_json.php'; // 先ほど修正したJSONファイルを呼ぶ
     if (lastId !== null) {
         url += '?last_id=' + lastId;
     }
@@ -104,7 +147,6 @@ document.addEventListener("DOMContentLoaded", () => {
     request.onload = (event) => {
       const response = event.target.response;
       
-      // データが空なら終了
       if (!response.entries || response.entries.length === 0) {
           isFinished = true;
           loadingIndicator.style.display = 'none';
@@ -118,7 +160,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         entryCopied.querySelector('[data-role="entryIdArea"]').innerText = entry.id.toString();
         
-        // ユーザーアイコン
+        // アイコン
         if (entry.user_icon_filename) {
             const iconImage = entryCopied.querySelector('[data-role="entryUserIconImage"]');
             iconImage.src = '/image/' + entry.user_icon_filename;
@@ -130,16 +172,28 @@ document.addEventListener("DOMContentLoaded", () => {
         entryCopied.querySelector('[data-role="entryCreatedAtArea"]').innerText = entry.created_at;
         entryCopied.querySelector('[data-role="entryBodyArea"]').innerHTML = entry.body;
 
-        // 投稿画像
+        // ▼ 投稿画像の表示処理 (複数対応)
+        // timeline_json.php からは "img1.png,img2.png" のようにカンマ区切りで来る
         if (entry.image_filename) {
-            const imageArea = entryCopied.querySelector('[data-role="entryImageArea"]');
-            imageArea.src = '/image/' + entry.image_filename;
-            imageArea.style.display = 'block';
+            const imageContainer = entryCopied.querySelector('[data-role="entryImageArea"]');
+            const filenames = entry.image_filename.split(','); // カンマで分割して配列にする
+
+            filenames.forEach(filename => {
+                if(!filename) return; // 空文字チェック
+                
+                const img = document.createElement('img');
+                img.src = '/image/' + filename;
+                img.style.maxWidth = '200px';
+                img.style.maxHeight = '200px';
+                img.style.display = 'block';
+                img.style.marginBottom = '5px';
+                img.style.borderRadius = '4px';
+                
+                imageContainer.appendChild(img);
+            });
         }
 
         entriesRenderArea.appendChild(entryCopied);
-        
-        // 最後に読み込んだIDを更新
         lastId = entry.id;
       });
 
@@ -150,54 +204,99 @@ document.addEventListener("DOMContentLoaded", () => {
     request.send();
   };
 
-  // 初回読み込み
   fetchEntries();
 
-  // スクロールイベント監視
   window.addEventListener('scroll', () => {
-    // 画面の一番下から 100px 以内の位置に来たら次のデータを読み込む
     const scrollHeight = document.documentElement.scrollHeight;
     const scrollPosition = window.innerHeight + window.scrollY;
-    
     if ((scrollHeight - scrollPosition) < 100) {
       fetchEntries();
     }
   });
 
 
-  // --- 以下、投稿画像縮小用スクリプト（変更なし） ---
+  // --- 画像選択・縮小・プレビューロジック (複数対応) ---
   const imageInput = document.getElementById("imageInput");
+  const removeImageButton = document.getElementById("removeImageButton");
+  const hiddenInputsContainer = document.getElementById("hiddenInputsContainer");
+  const imagePreviewContainer = document.getElementById("imagePreviewContainer");
+
   imageInput.addEventListener("change", () => {
     if (imageInput.files.length < 1) return;
-    const file = imageInput.files[0];
-    if (!file.type.startsWith('image/')) return;
+    
+    // 枚数制限チェック
+    if (imageInput.files.length > 4) {
+        alert("画像は最大4枚までです");
+        imageInput.value = '';
+        return;
+    }
 
-    const imageBase64Input = document.getElementById("imageBase64Input");
-    const canvas = document.getElementById("imageCanvas");
-    const reader = new FileReader();
-    const image = new Image();
-    reader.onload = () => {
-      image.onload = () => {
-        const originalWidth = image.naturalWidth;
-        const originalHeight = image.naturalHeight;
-        const maxLength = 1000;
-        if (originalWidth <= maxLength && originalHeight <= maxLength) {
-            canvas.width = originalWidth;
-            canvas.height = originalHeight;
-        } else if (originalWidth > originalHeight) {
-            canvas.width = maxLength;
-            canvas.height = maxLength * originalHeight / originalWidth;
-        } else {
-            canvas.width = maxLength * originalWidth / originalHeight;
-            canvas.height = maxLength;
-        }
-        const context = canvas.getContext("2d");
-        context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        imageBase64Input.value = canvas.toDataURL();
-      };
-      image.src = reader.result;
-    };
-    reader.readAsDataURL(file);
+    // リセット
+    hiddenInputsContainer.innerHTML = '';
+    imagePreviewContainer.innerHTML = '';
+
+    // 選択されたファイルを1つずつ処理
+    Array.from(imageInput.files).forEach((file) => {
+        if (!file.type.startsWith('image/')) return;
+
+        const reader = new FileReader();
+        const image = new Image();
+
+        reader.onload = () => {
+            image.onload = () => {
+                // 縮小計算
+                const originalWidth = image.naturalWidth;
+                const originalHeight = image.naturalHeight;
+                const maxLength = 1000;
+                let width, height;
+
+                if (originalWidth <= maxLength && originalHeight <= maxLength) {
+                    width = originalWidth; height = originalHeight;
+                } else if (originalWidth > originalHeight) {
+                    width = maxLength; height = maxLength * originalHeight / originalWidth;
+                } else {
+                    width = maxLength * originalWidth / originalHeight; height = maxLength;
+                }
+
+                // Canvas作成
+                const canvas = document.createElement('canvas');
+                canvas.width = width;
+                canvas.height = height;
+                
+                // プレビュー用の見た目スタイル
+                canvas.style.maxWidth = '150px'; 
+                canvas.style.maxHeight = '150px';
+                canvas.style.objectFit = 'contain';
+                canvas.style.border = '1px solid #ddd';
+
+                const context = canvas.getContext("2d");
+                context.drawImage(image, 0, 0, width, height);
+
+                // プレビュー表示
+                imagePreviewContainer.appendChild(canvas);
+
+                // 送信データ作成 (配列形式 name="image_base64[]")
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = 'image_base64[]';
+                input.value = canvas.toDataURL();
+                hiddenInputsContainer.appendChild(input);
+
+                // 削除ボタン表示
+                removeImageButton.style.display = 'inline-block';
+            };
+            image.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+    });
+  });
+
+  // 画像削除ボタン
+  removeImageButton.addEventListener("click", () => {
+    imageInput.value = '';
+    hiddenInputsContainer.innerHTML = '';
+    imagePreviewContainer.innerHTML = '';
+    removeImageButton.style.display = 'none';
   });
 });
 </script>
