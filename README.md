@@ -23,7 +23,7 @@ docker compose version
 ```bash
 sudo yum install git -y
 mkdir -p ~/apps && cd ~/apps
-git clone https://github.com/ZeroRein/aw-edu02.git
+git clone https://github.com/ZeroRein/aw-edu01.git
 cd aw-edu01
 ```
 
@@ -36,7 +36,7 @@ docker ps
 ```
 
 アクセス:
-- アプリ: http://<EC2_PUBLIC_IP>/login.php
+- アプリ: http://<EC2_PUBLIC_IP>/bbs.php
 
 
 
