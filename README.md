@@ -24,7 +24,7 @@ docker compose version
 sudo yum install git -y
 mkdir -p ~/apps && cd ~/apps
 git clone https://github.com/ZeroRein/aw-edu02.git
-cd aw-edu01
+cd aw-edu02
 ```
 
 
