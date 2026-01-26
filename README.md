@@ -1,4 +1,4 @@
-# aw-edu01 EC2 デプロイ手順書
+# aw-edu02 EC2 デプロイ手順書
 
 ## 1. Docker / Docker Compose インストール
 ```bash
