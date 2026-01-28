@@ -1,18 +1,14 @@
 <?php
 session_start();
 
-// ログイン確認
 if (empty($_SESSION['login_user_id'])) {
   header("HTTP/1.1 302 Found");
   header("Location: /login.php");
   return;
 }
 
-// DB接続
 $dbh = new PDO('mysql:host=mysql;dbname=koki04', 'root', '');
 
-// 自分(login_user_id) が「フォローされている(followee)」データを取得
-// 相手(follower) の情報を users テーブルから結合して取得
 $sql = 'SELECT user_relationships.*, users.name AS follower_user_name, users.icon_filename AS follower_user_icon_filename'
      . ' FROM user_relationships'
      . ' INNER JOIN users ON user_relationships.follower_user_id = users.id'
