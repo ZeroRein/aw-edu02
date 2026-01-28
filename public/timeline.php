@@ -104,6 +104,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['body'])) {
   <a href="/users.php">会員一覧(フォローする)</a> | 
   <a href="/follow_list.php">フォロー中</a> | 
   <a href="/follower_list.php">フォロワー</a> | 
+  <a href="/setting/index.php">設定</a> |
   <a href="/login.php">ログアウト</a>
 </div>
 
