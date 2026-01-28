@@ -9,7 +9,8 @@ CREATE TABLE IF NOT EXISTS users (
     password VARCHAR(255) NOT NULL,
     icon_filename VARCHAR(255) DEFAULT NULL,
     birthday DATE DEFAULT NULL, 
-    cover_filename VARCHAR(255) DEFAULT NULL;
+    cover_filename VARCHAR(255) DEFAULT NULL,
+    introduction TEXT DEFAULT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
@@ -40,5 +41,6 @@ CREATE TABLE IF NOT EXISTS user_relationships (
     FOREIGN KEY (follower_user_id) REFERENCES users(id) ON DELETE CASCADE,
     FOREIGN KEY (followee_user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
 
 
