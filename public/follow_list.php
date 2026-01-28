@@ -1,18 +1,14 @@
 <?php
 session_start();
 
-// ログインしてなければログイン画面に飛ばす
 if (empty($_SESSION['login_user_id'])) {
   header("HTTP/1.1 302 Found");
   header("Location: /login.php");
   return;
 }
 
-// DBに接続
 $dbh = new PDO('mysql:host=mysql;dbname=koki04', 'root', '');
 
-// 自分がフォローしている一覧をDBから引く。
-// テーブル結合を使って、フォローしている対象の会員情報も一緒に取得。
 $select_sth = $dbh->prepare(
   'SELECT user_relationships.*, users.name AS followee_user_name, users.icon_filename AS followee_user_icon_filename'
   . ' FROM user_relationships INNER JOIN users ON user_relationships.followee_user_id = users.id'
