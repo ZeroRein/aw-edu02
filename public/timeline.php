@@ -251,6 +251,14 @@ document.addEventListener("DOMContentLoaded", () => {
   const clearBtn = document.getElementById('clearImagesBtn');
 
   imageInput.addEventListener('change', () => {
+    if (imageInput.files.length > 4) {
+        alert("画像は最大4枚までです。");
+        imageInput.value = ''; 
+        previewArea.innerHTML = '';
+        hiddenInputs.innerHTML = '';
+        clearBtn.style.display = 'none';
+        return;
+    }
     if (imageInput.files.length === 0) return;
 
     previewArea.innerHTML = '';
