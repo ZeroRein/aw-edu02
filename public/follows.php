@@ -12,7 +12,6 @@ if (empty($_GET['followee_user_id'])) {
     print("");
     return;
   }
-  // DB接続
     $dbh = new PDO('mysql:host=mysql;dbname=koki04', 'root', '');
 
   $insert_sth = $dbh->prepare(
