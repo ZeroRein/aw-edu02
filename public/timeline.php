@@ -1,302 +1,311 @@
 <?php
+// DB接続
 $dbh = new PDO('mysql:host=mysql;dbname=koki04', 'root', '');
 
 session_start();
+
+// ログイン確認
 if (empty($_SESSION['login_user_id'])) {
-  header("HTTP/1.1 302 Found");
-  header("Location: /login.php");
-  return;
+    header("HTTP/1.1 302 Found");
+    header("Location: /login.php");
+    return;
 }
 
-// ログインユーザー情報取得
-$user_select_sth = $dbh->prepare("SELECT * from users WHERE id = :id");
-$user_select_sth->execute([':id' => $_SESSION['login_user_id']]);
-$user = $user_select_sth->fetch();
+// ユーザー情報取得
+$user_sth = $dbh->prepare("SELECT * from users WHERE id = :id");
+$user_sth->execute([':id' => $_SESSION['login_user_id']]);
+$user = $user_sth->fetch();
 
 // --- 投稿処理 (POST) ---
-if (isset($_POST['body']) && !empty($_SESSION['login_user_id'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['body'])) {
+    
+    // 画像保存処理
+    $uploaded_filenames = [];
+    if (isset($_POST['image_base64']) && is_array($_POST['image_base64'])) {
+        foreach ($_POST['image_base64'] as $base64) {
+            if (empty($base64)) continue;
+            
+            // Base64デコード
+            $base64 = preg_replace('/^data:.+base64,/', '', $base64);
+            $image_binary = base64_decode($base64);
+            
+            // ファイル名生成
+            $filename = time() . bin2hex(random_bytes(10)) . '.png';
+            $filepath = '/var/www/upload/image/' . $filename;
+            
+            // 保存
+            file_put_contents($filepath, $image_binary);
+            $uploaded_filenames[] = $filename;
+        }
+    }
 
-  // 1. 画像ファイルをサーバーに保存し、ファイル名のリストを作る
-  $uploaded_filenames = [];
+    try {
+        $dbh->beginTransaction();
 
-  if (isset($_POST['image_base64']) && is_array($_POST['image_base64'])) {
-      foreach ($_POST['image_base64'] as $base64) {
-          if (empty($base64)) continue;
+        // 1. 本文保存
+        $insert_sth = $dbh->prepare("INSERT INTO bbs_entries (user_id, body) VALUES (:user_id, :body)");
+        $insert_sth->execute([
+            ':user_id' => $_SESSION['login_user_id'],
+            ':body' => $_POST['body']
+        ]);
+        
+        // 2. 直前のID取得
+        $entryId = $dbh->lastInsertId();
 
-          // Base64デコード
-          $base64 = preg_replace('/^data:.+base64,/', '', $base64);
-          $image_binary = base64_decode($base64);
+        // 3. 画像データ保存 (entry_imagesテーブル)
+        if (!empty($uploaded_filenames)) {
+            $img_sth = $dbh->prepare("INSERT INTO entry_images (entry_id, image_filename) VALUES (:eid, :fname)");
+            foreach ($uploaded_filenames as $fname) {
+                $img_sth->execute([
+                    ':eid' => $entryId, 
+                    ':fname' => $fname
+                ]);
+            }
+        }
+        $dbh->commit();
 
-          // ファイル名生成 (一意にする)
-          $image_filename = strval(time()) . bin2hex(random_bytes(25)) . '.png';
-          $filepath =  '/var/www/upload/image/' . $image_filename;
+    } catch (Exception $e) {
+        $dbh->rollBack();
+        // エラー時はログに出すなど（画面には出さない）
+    }
 
-          // 保存
-          file_put_contents($filepath, $image_binary);
-          $uploaded_filenames[] = $image_filename;
-      }
-  }
-
-  // 2. データベースへの保存 (トランザクション)
-  try {
-      $dbh->beginTransaction();
-
-      // (A) bbs_entries に本文を保存
-      // ※ image_filename カラムはもう使わないのでINSERT対象から外す
-      $insert_sth = $dbh->prepare("INSERT INTO bbs_entries (user_id, body) VALUES (:user_id, :body)");
-      $insert_sth->execute([
-          ':user_id' => $_SESSION['login_user_id'],
-          ':body' => $_POST['body'],
-      ]);
-
-      // (B) 直前のINSERTで発行されたIDを取得
-      $entryId = $dbh->lastInsertId();
-
-      // (C) entry_images に画像を保存
-      if (!empty($uploaded_filenames)) {
-          $image_sth = $dbh->prepare("INSERT INTO entry_images (entry_id, image_filename) VALUES (:entry_id, :filename)");
-          
-          foreach ($uploaded_filenames as $filename) {
-              $image_sth->execute([
-                  ':entry_id' => $entryId,  // 親のID
-                  ':filename' => $filename,
-              ]);
-          }
-      }
-
-      $dbh->commit();
-
-  } catch (Exception $e) {
-      $dbh->rollBack();
-      // 本来はここでエラーログなどを出す
-  }
-
-  header("HTTP/1.1 303 See Other");
-  header("Location: ./timeline.php");
-  return;
+    // 再読み込みして投稿内容をクリア
+    header("Location: ./timeline.php");
+    return;
 }
 ?>
 
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>タイムライン</title>
+    <style>
+        /* 簡単なスタイル定義 */
+        body { font-family: sans-serif; padding: 20px; }
+        .entry { border-bottom: 1px solid #ddd; padding: 15px 0; }
+        .entry-header { display: flex; align-items: center; margin-bottom: 5px; }
+        .user-icon { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; margin-right: 10px; background: #eee; }
+        .user-name { font-weight: bold; text-decoration: none; color: #333; }
+        .entry-date { color: #888; font-size: 0.85em; margin-left: auto; }
+        .entry-body { margin: 5px 0 10px 50px; white-space: pre-wrap; }
+        .entry-images { margin-left: 50px; display: flex; flex-wrap: wrap; gap: 10px; }
+        .entry-image { max-width: 200px; max-height: 200px; border-radius: 5px; border: 1px solid #eee; }
+        
+        #preview-area canvas { max-width: 100px; max-height: 100px; border: 1px solid #ccc; margin: 5px; }
+    </style>
+</head>
+<body>
+
 <div>
-  現在 <?= htmlspecialchars($user['name']) ?> (ID: <?= $user['id'] ?>) さんでログイン中
+  現在 <strong><?= htmlspecialchars($user['name']) ?></strong> (ID: <?= $user['id'] ?>) さんでログイン中
 </div>
 <div style="margin-bottom: 1em;">
-  <a href="/setting/index.php">設定画面</a> / <a href="/users.php">会員一覧画面</a>
+  <a href="/users.php">会員一覧(フォローする)</a> | 
+  <a href="/follow_list.php">フォロー中</a> | 
+  <a href="/follower_list.php">フォロワー</a> | 
+  <a href="/login.php">ログアウト</a>
 </div>
 
-<form method="POST" action="./timeline.php">
-  <textarea name="body" required placeholder="今なにしてる？"></textarea>
-  <div style="margin: 1em 0;">
-    <input type="file" accept="image/*" name="image[]" id="imageInput" multiple>
-    <button type="button" id="removeImageButton" style="display: none; margin-left: 10px;">画像を削除</button>
+<form method="POST" action="./timeline.php" style="background: #f9f9f9; padding: 15px; border-radius: 8px;">
+  <textarea name="body" required placeholder="今なにしてる？" style="width: 100%; height: 60px; box-sizing: border-box;"></textarea>
+  
+  <div style="margin-top: 10px;">
+    <input type="file" accept="image/*" id="imageInput" multiple>
+    <button type="button" id="clearImagesBtn" style="display:none;">画像をクリア</button>
   </div>
-  
-  <div id="hiddenInputsContainer"></div>
 
-  <div id="imagePreviewContainer" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 10px;"></div>
+  <div id="preview-area" style="margin-top: 10px;"></div>
+  <div id="hidden-inputs"></div>
   
-  <button type="submit">送信</button>
+  <div style="margin-top: 10px; text-align: right;">
+    <button type="submit" style="padding: 5px 20px;">送信</button>
+  </div>
 </form>
+
 <hr>
 
-<dl id="entryTemplate" style="display: none; margin-bottom: 1em; padding-bottom: 1em; border-bottom: 1px solid #ccc;">
-  <dt>番号</dt>
-  <dd data-role="entryIdArea"></dd>
-  <dt>投稿者</dt>
-  <dd>
-    <img src="" data-role="entryUserIconImage" style="display: none; width: 30px; height: 30px; object-fit: cover; border-radius: 50%; vertical-align: middle; margin-right: 5px;">
-    <a href="" data-role="entryUserAnchor"></a>
-  </dd>
-  <dt>日時</dt>
-  <dd data-role="entryCreatedAtArea"></dd>
-  <dt>内容</dt>
-  <dd data-role="entryBodyArea"></dd>
-  <dt>画像</dt>
-  <dd data-role="entryImageArea"></dd>
-</dl>
-
 <div id="entriesRenderArea"></div>
-<div id="loadingIndicator" style="display: none;">読み込み中...</div>
+<div id="loadingIndicator" style="display: none; text-align: center; color: #888;">読み込み中...</div>
+
+<template id="entryTemplate">
+  <div class="entry">
+    <div class="entry-header">
+      <img src="" class="user-icon" data-role="icon">
+      <a href="" class="user-name" data-role="name"></a>
+      <span class="entry-date" data-role="date"></span>
+    </div>
+    <div class="entry-body" data-role="body"></div>
+    <div class="entry-images" data-role="images"></div>
+  </div>
+</template>
 
 <script>
 document.addEventListener("DOMContentLoaded", () => {
-  const entryTemplate = document.getElementById('entryTemplate');
-  const entriesRenderArea = document.getElementById('entriesRenderArea');
+  const entriesArea = document.getElementById('entriesRenderArea');
   const loadingIndicator = document.getElementById('loadingIndicator');
+  const template = document.getElementById('entryTemplate');
 
   let lastId = null;
   let isLoading = false;
   let isFinished = false;
 
-  // --- 投稿取得・表示ロジック ---
+  // --- タイムライン取得処理 ---
   const fetchEntries = () => {
     if (isLoading || isFinished) return;
 
     isLoading = true;
     loadingIndicator.style.display = 'block';
 
-    const request = new XMLHttpRequest();
-    let url = '/timeline_json.php'; // 先ほど修正したJSONファイルを呼ぶ
+    // JSON取得APIへリクエスト
+    let url = '/timeline_json.php';
     if (lastId !== null) {
         url += '?last_id=' + lastId;
     }
 
-    request.open('GET', url, true);
-    request.responseType = 'json';
-
-    request.onload = (event) => {
-      const response = event.target.response;
-      
-      if (!response.entries || response.entries.length === 0) {
-          isFinished = true;
-          loadingIndicator.style.display = 'none';
-          isLoading = false;
-          return;
-      }
-
-      response.entries.forEach((entry) => {
-        const entryCopied = entryTemplate.cloneNode(true);
-        entryCopied.style.display = 'block';
-
-        entryCopied.querySelector('[data-role="entryIdArea"]').innerText = entry.id.toString();
+    fetch(url)
+      .then(response => {
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+        return response.json();
+      })
+      .then(data => {
+        const entries = data.entries;
         
-        // アイコン
-        if (entry.user_icon_filename) {
-            const iconImage = entryCopied.querySelector('[data-role="entryUserIconImage"]');
-            iconImage.src = '/image/' + entry.user_icon_filename;
-            iconImage.style.display = 'inline-block';
+        if (!entries || entries.length === 0) {
+            isFinished = true;
+            loadingIndicator.style.display = 'none';
+            // 初回ロードで0件の場合はメッセージを出す
+            if (lastId === null) {
+                entriesArea.innerHTML = '<p style="text-align:center; color:#888;">投稿がありません。<br>誰かをフォローするか、自分で投稿してみましょう！</p>';
+            }
+            return;
         }
 
-        entryCopied.querySelector('[data-role="entryUserAnchor"]').innerText = entry.user_name;
-        entryCopied.querySelector('[data-role="entryUserAnchor"]').href = entry.user_profile_url;
-        entryCopied.querySelector('[data-role="entryCreatedAtArea"]').innerText = entry.created_at;
-        entryCopied.querySelector('[data-role="entryBodyArea"]').innerHTML = entry.body;
+        entries.forEach(entry => {
+            const clone = template.content.cloneNode(true);
+            
+            // アイコン
+            const iconImg = clone.querySelector('[data-role="icon"]');
+            if (entry.user_icon_filename) {
+                iconImg.src = '/image/' + entry.user_icon_filename;
+            } else {
+                iconImg.src = ''; // またはデフォルトアイコン
+                iconImg.style.display = 'none'; // 画像がない場合は非表示にするなど
+            }
 
-        // ▼ 投稿画像の表示処理 (複数対応)
-        // timeline_json.php からは "img1.png,img2.png" のようにカンマ区切りで来る
-        if (entry.image_filename) {
-            const imageContainer = entryCopied.querySelector('[data-role="entryImageArea"]');
-            const filenames = entry.image_filename.split(','); // カンマで分割して配列にする
+            // 名前・リンク
+            const nameLink = clone.querySelector('[data-role="name"]');
+            nameLink.textContent = entry.user_name;
+            nameLink.href = entry.user_profile_url;
 
-            filenames.forEach(filename => {
-                if(!filename) return; // 空文字チェック
-                
-                const img = document.createElement('img');
-                img.src = '/image/' + filename;
-                img.style.maxWidth = '200px';
-                img.style.maxHeight = '200px';
-                img.style.display = 'block';
-                img.style.marginBottom = '5px';
-                img.style.borderRadius = '4px';
-                
-                imageContainer.appendChild(img);
-            });
+            // 日時
+            clone.querySelector('[data-role="date"]').textContent = entry.created_at;
+
+            // 本文
+            clone.querySelector('[data-role="body"]').innerHTML = entry.body;
+
+            // 画像 (カンマ区切りで来る前提)
+            const imagesArea = clone.querySelector('[data-role="images"]');
+            if (entry.image_filename) {
+                const files = entry.image_filename.split(',');
+                files.forEach(file => {
+                    if (!file) return;
+                    const img = document.createElement('img');
+                    img.src = '/image/' + file;
+                    img.className = 'entry-image';
+                    imagesArea.appendChild(img);
+                });
+            }
+
+            entriesArea.appendChild(clone);
+            lastId = entry.id; // 次の読み込みのためにIDを記録
+        });
+      })
+      .catch(error => {
+        console.error('Error:', error);
+        // エラー表示
+        if (lastId === null) {
+            entriesArea.innerHTML = '<p style="color:red;">投稿の読み込みに失敗しました。</p>';
         }
-
-        entriesRenderArea.appendChild(entryCopied);
-        lastId = entry.id;
+      })
+      .finally(() => {
+        isLoading = false;
+        loadingIndicator.style.display = 'none';
       });
-
-      isLoading = false;
-      loadingIndicator.style.display = 'none';
-    };
-
-    request.send();
   };
 
+  // 初回読み込み
   fetchEntries();
 
+  // 無限スクロール
   window.addEventListener('scroll', () => {
-    const scrollHeight = document.documentElement.scrollHeight;
-    const scrollPosition = window.innerHeight + window.scrollY;
-    if ((scrollHeight - scrollPosition) < 100) {
-      fetchEntries();
+    const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
+    if (scrollHeight - scrollTop <= clientHeight + 100) {
+        fetchEntries();
     }
   });
 
 
-  // --- 画像選択・縮小・プレビューロジック (複数対応) ---
-  const imageInput = document.getElementById("imageInput");
-  const removeImageButton = document.getElementById("removeImageButton");
-  const hiddenInputsContainer = document.getElementById("hiddenInputsContainer");
-  const imagePreviewContainer = document.getElementById("imagePreviewContainer");
+  // --- 画像投稿プレビュー処理 ---
+  const imageInput = document.getElementById('imageInput');
+  const previewArea = document.getElementById('preview-area');
+  const hiddenInputs = document.getElementById('hidden-inputs');
+  const clearBtn = document.getElementById('clearImagesBtn');
 
-  imageInput.addEventListener("change", () => {
-    if (imageInput.files.length < 1) return;
-    
-    // 枚数制限チェック
-    if (imageInput.files.length > 4) {
-        alert("画像は最大4枚までです");
-        imageInput.value = '';
-        return;
-    }
+  imageInput.addEventListener('change', () => {
+    if (imageInput.files.length === 0) return;
 
-    // リセット
-    hiddenInputsContainer.innerHTML = '';
-    imagePreviewContainer.innerHTML = '';
+    previewArea.innerHTML = '';
+    hiddenInputs.innerHTML = '';
+    clearBtn.style.display = 'inline-block';
 
-    // 選択されたファイルを1つずつ処理
-    Array.from(imageInput.files).forEach((file) => {
-        if (!file.type.startsWith('image/')) return;
-
+    Array.from(imageInput.files).forEach(file => {
         const reader = new FileReader();
-        const image = new Image();
-
-        reader.onload = () => {
-            image.onload = () => {
-                // 縮小計算
-                const originalWidth = image.naturalWidth;
-                const originalHeight = image.naturalHeight;
-                const maxLength = 1000;
-                let width, height;
-
-                if (originalWidth <= maxLength && originalHeight <= maxLength) {
-                    width = originalWidth; height = originalHeight;
-                } else if (originalWidth > originalHeight) {
-                    width = maxLength; height = maxLength * originalHeight / originalWidth;
+        reader.onload = (e) => {
+            const img = new Image();
+            img.onload = () => {
+                // CanvasでリサイズしてBase64化
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const MAX_SIZE = 800;
+                let w = img.width;
+                let h = img.height;
+                
+                if (w > h) {
+                    if (w > MAX_SIZE) { h *= MAX_SIZE / w; w = MAX_SIZE; }
                 } else {
-                    width = maxLength * originalWidth / originalHeight; height = maxLength;
+                    if (h > MAX_SIZE) { w *= MAX_SIZE / h; h = MAX_SIZE; }
                 }
 
-                // Canvas作成
-                const canvas = document.createElement('canvas');
-                canvas.width = width;
-                canvas.height = height;
-                
-                // プレビュー用の見た目スタイル
-                canvas.style.maxWidth = '150px'; 
-                canvas.style.maxHeight = '150px';
-                canvas.style.objectFit = 'contain';
-                canvas.style.border = '1px solid #ddd';
-
-                const context = canvas.getContext("2d");
-                context.drawImage(image, 0, 0, width, height);
+                canvas.width = w;
+                canvas.height = h;
+                ctx.drawImage(img, 0, 0, w, h);
 
                 // プレビュー表示
-                imagePreviewContainer.appendChild(canvas);
+                previewArea.appendChild(canvas);
 
-                // 送信データ作成 (配列形式 name="image_base64[]")
+                // 送信データ作成
                 const input = document.createElement('input');
                 input.type = 'hidden';
                 input.name = 'image_base64[]';
-                input.value = canvas.toDataURL();
-                hiddenInputsContainer.appendChild(input);
-
-                // 削除ボタン表示
-                removeImageButton.style.display = 'inline-block';
+                input.value = canvas.toDataURL('image/jpeg');
+                hiddenInputs.appendChild(input);
             };
-            image.src = reader.result;
+            img.src = e.target.result;
         };
         reader.readAsDataURL(file);
     });
   });
 
-  // 画像削除ボタン
-  removeImageButton.addEventListener("click", () => {
+  clearBtn.addEventListener('click', () => {
     imageInput.value = '';
-    hiddenInputsContainer.innerHTML = '';
-    imagePreviewContainer.innerHTML = '';
-    removeImageButton.style.display = 'none';
+    previewArea.innerHTML = '';
+    hiddenInputs.innerHTML = '';
+    clearBtn.style.display = 'none';
   });
 });
 </script>
+</body>
+</html>
