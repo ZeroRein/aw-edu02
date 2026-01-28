@@ -7,10 +7,8 @@ if (empty($_SESSION['login_user_id'])) {
   return;
 }
 
-// DBに接続
 $dbh = new PDO('mysql:host=mysql;dbname=koki04', 'root', '');
 
-// フォロー対象(フォローされる側)のデータを引く
 $followee_user = null;
 if (!empty($_GET['followee_user_id'])) {
   $select_sth = $dbh->prepare("SELECT * FROM users WHERE id = :id");
@@ -25,7 +23,6 @@ if (empty($followee_user)) {
   return;
 }
 
-// 現在のフォロー状態をDBから取得
 $select_sth = $dbh->prepare(
   "SELECT * FROM user_relationships"
   . " WHERE follower_user_id = :follower_user_id AND followee_user_id = :followee_user_id"
@@ -35,13 +32,13 @@ $select_sth->execute([
   ':follower_user_id' => $_SESSION['login_user_id'], // フォローする側はログインしている会員
 ]);
 $relationship = $select_sth->fetch();
-if (!empty($relationship)) { // 既にフォロー関係がある場合は適当なエラー表示して終了
+if (!empty($relationship)) { 
   print("既にフォローしています。");
   return;
 }
 
 $insert_result = false;
-if ($_SERVER['REQUEST_METHOD'] == 'POST') { // フォームでPOSTした場合は実際のフォロー登録処理を行う
+if ($_SERVER['REQUEST_METHOD'] == 'POST') { 
   $insert_sth = $dbh->prepare(
     "INSERT INTO user_relationships (follower_user_id, followee_user_id) VALUES (:follower_user_id, :followee_user_id)"
   );
