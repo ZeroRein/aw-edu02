@@ -22,7 +22,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['body'])) {
     // 画像保存処理
     $uploaded_filenames = [];
     if (isset($_POST['image_base64']) && is_array($_POST['image_base64'])) {
+        $count = 0;
         foreach ($_POST['image_base64'] as $base64) {
+            if ($count >= 4) break;
             if (empty($base64)) continue;
             
             // Base64デコード
@@ -36,6 +38,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['body'])) {
             // 保存
             file_put_contents($filepath, $image_binary);
             $uploaded_filenames[] = $filename;
+
+            $count++;
         }
     }
 
