@@ -66,10 +66,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['body'])) {
 
     } catch (Exception $e) {
         $dbh->rollBack();
-        // エラー時はログに出すなど（画面には出さない）
     }
 
-    // 再読み込みして投稿内容をクリア
     header("Location: ./timeline.php");
     return;
 }
@@ -81,7 +79,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['body'])) {
     <meta charset="UTF-8">
     <title>タイムライン</title>
     <style>
-        /* 簡単なスタイル定義 */
         body { font-family: sans-serif; padding: 20px; }
         .entry { border-bottom: 1px solid #ddd; padding: 15px 0; }
         .entry-header { display: flex; align-items: center; margin-bottom: 5px; }
@@ -151,14 +148,12 @@ document.addEventListener("DOMContentLoaded", () => {
   let isLoading = false;
   let isFinished = false;
 
-  // --- タイムライン取得処理 ---
   const fetchEntries = () => {
     if (isLoading || isFinished) return;
 
     isLoading = true;
     loadingIndicator.style.display = 'block';
 
-    // JSON取得APIへリクエスト
     let url = '/timeline_json.php';
     if (lastId !== null) {
         url += '?last_id=' + lastId;
@@ -221,12 +216,11 @@ document.addEventListener("DOMContentLoaded", () => {
             }
 
             entriesArea.appendChild(clone);
-            lastId = entry.id; // 次の読み込みのためにIDを記録
+            lastId = entry.id; 
         });
       })
       .catch(error => {
         console.error('Error:', error);
-        // エラー表示
         if (lastId === null) {
             entriesArea.innerHTML = '<p style="color:red;">投稿の読み込みに失敗しました。</p>';
         }
@@ -237,10 +231,8 @@ document.addEventListener("DOMContentLoaded", () => {
       });
   };
 
-  // 初回読み込み
   fetchEntries();
 
-  // 無限スクロール
   window.addEventListener('scroll', () => {
     const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
     if (scrollHeight - scrollTop <= clientHeight + 100) {
@@ -249,7 +241,6 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
 
-  // --- 画像投稿プレビュー処理 ---
   const imageInput = document.getElementById('imageInput');
   const previewArea = document.getElementById('preview-area');
   const hiddenInputs = document.getElementById('hidden-inputs');
@@ -267,7 +258,6 @@ document.addEventListener("DOMContentLoaded", () => {
         reader.onload = (e) => {
             const img = new Image();
             img.onload = () => {
-                // CanvasでリサイズしてBase64化
                 const canvas = document.createElement('canvas');
                 const ctx = canvas.getContext('2d');
                 const MAX_SIZE = 800;
@@ -284,10 +274,8 @@ document.addEventListener("DOMContentLoaded", () => {
                 canvas.height = h;
                 ctx.drawImage(img, 0, 0, w, h);
 
-                // プレビュー表示
                 previewArea.appendChild(canvas);
 
-                // 送信データ作成
                 const input = document.createElement('input');
                 input.type = 'hidden';
                 input.name = 'image_base64[]';
