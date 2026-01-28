@@ -5,9 +5,7 @@ if (empty($_SESSION['login_user_id'])) {
   header("Location: /login.php");
   return;
 }
-// DBに接続
 $dbh = new PDO('mysql:host=mysql;dbname=koki04', 'root', '');
-// セッションにあるログインIDから、ログインしている対象の会員情報を引く
 $select_sth = $dbh->prepare("SELECT * FROM users WHERE id = :id");
 $select_sth->execute([
   ':id' => $_SESSION['login_user_id'],
