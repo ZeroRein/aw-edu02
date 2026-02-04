@@ -40,3 +40,5 @@ cd aw-edu02
 docker compose build
 docker compose up -d
 ```
+アクセス
+http://54.226.200.172/login.php
